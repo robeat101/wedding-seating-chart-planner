@@ -1,0 +1,1042 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Wedding Ballroom Seating</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1 id="page-title" onclick="editTitle()">Wedding Ballroom Seating Chart</h1>
+        
+        <div class="hamburger-menu">
+            <button class="hamburger-btn" onclick="toggleMenu()">☰</button>
+            <div class="menu-dropdown" id="menu-dropdown">
+                <button class="menu-item" onclick="loadGuestData()">Load Guest Data</button>
+                <button class="menu-item" onclick="saveSeatingChart()">Save Seating Chart</button>
+                <button class="menu-item" onclick="loadSeatingChart()">Load Seating Chart</button>
+                <button class="menu-item" onclick="clearAll()">Clear All</button>
+                <div class="table-count-control">
+                    <label>Tables:</label>
+                    <input type="number" id="table-count-input" min="1" max="20" value="14" onchange="updateTableCount(this.value)">
+                    <input type="range" id="table-count-slider" min="1" max="20" value="14" oninput="updateTableCountFromSlider(this.value)">
+                </div>
+            </div>
+        </div>
+        
+        <div class="search-container">
+            <input type="text" id="guest-search" placeholder="Search guests..." oninput="searchGuests(this.value)">
+        </div>
+        
+        <div class="stats">
+            <span id="assigned-count">0</span> guests assigned | 
+            <span id="unassigned-count">0</span> guests unassigned
+        </div>
+        
+        <div class="main-layout">
+            <div class="guest-pool">
+                <h3>Unassigned Guests (Drag to Tables)</h3>
+                <label><input type="checkbox" id="hide-declined" checked onchange="filterGuests()"> Hide declined RSVPs</label>
+                <div id="guest-list"></div>
+            </div>
+            
+            <div class="ballroom" id="ballroom">
+                <!-- Sweetheart table -->
+                <div class="sweetheart-table" data-table-id="sweetheart">Sweetheart Table</div>
+                
+                <!-- Dance floor -->
+                <div class="dance-floor">Dance Floor</div>
+                
+                <!-- Decorative pillars -->
+                <div class="pillar" style="left: 50px; top: 100px;"></div>
+                <div class="pillar" style="right: 50px; top: 100px;"></div>
+                <div class="pillar" style="left: 50px; bottom: 100px;"></div>
+                <div class="pillar" style="right: 50px; bottom: 100px;"></div>
+                
+                <!-- Tables will be positioned here -->
+            </div>
+        </div>
+        
+        <div class="table-panel" id="table-panel" style="display: none;">
+            <div class="table-panel-inner" id="table-panel-inner">
+                <button class="close-detail" onclick="closeTableDetail()">&times;</button>
+            </div>
+        </div>
+        
+
+    </div>
+
+    <script>
+        const guests = [];
+        window.guestData = {}; // Maps userId to {name, rsvp, tags}
+
+
+
+        let currentTableCount = 14;
+        let tableNames = {}; // Maps table ID to display name
+        
+        function generateTablePositions(count) {
+            const positions = [];
+            const leftX1 = 300, leftX2 = 150, rightX1 = 850, rightX2 = 1000;
+            const startY = 150, spacing = 160;
+            
+            for (let i = 1; i <= count; i++) {
+                let x, y;
+                if (i <= Math.ceil(count / 4)) {
+                    // Left side - closer to dance floor
+                    x = leftX1;
+                    y = startY + (i - 1) * spacing;
+                } else if (i <= Math.ceil(count / 2)) {
+                    // Left side - farther from dance floor
+                    x = leftX2;
+                    y = startY + (i - Math.ceil(count / 4) - 1) * spacing + 80;
+                } else if (i <= Math.ceil(count * 3 / 4)) {
+                    // Right side - closer to dance floor
+                    x = rightX1;
+                    y = startY + (i - Math.ceil(count / 2) - 1) * spacing;
+                } else {
+                    // Right side - farther from dance floor
+                    x = rightX2;
+                    y = startY + (i - Math.ceil(count * 3 / 4) - 1) * spacing + 80;
+                }
+                positions.push({id: i, x, y});
+            }
+            return positions;
+        }
+
+        let tableAssignments = {};
+
+        function createChairs(tableEl, tableX, tableY, tableId) {
+            const radius = 55; // Distance from table center
+            for (let i = 0; i < 12; i++) {
+                const angle = (i * 30) * (Math.PI / 180); // 30 degrees apart
+                const chairX = tableX + 40 + Math.cos(angle) * radius;
+                const chairY = tableY + 40 + Math.sin(angle) * radius;
+                
+                const chair = document.createElement('div');
+                chair.className = 'chair';
+                chair.dataset.tableId = tableId;
+                chair.dataset.seatIndex = i;
+                chair.style.left = chairX + 'px';
+                chair.style.top = chairY + 'px';
+                
+                document.getElementById('ballroom').appendChild(chair);
+            }
+        }
+        
+        function initializeTables() {
+            const ballroom = document.getElementById('ballroom');
+            const tablePositions = generateTablePositions(currentTableCount);
+            
+            // Clear existing tables and chairs
+            document.querySelectorAll('.table, .chair').forEach(el => el.remove());
+            
+            tablePositions.forEach(table => {
+                const tableEl = document.createElement('div');
+                tableEl.className = 'table';
+                tableEl.style.left = table.x + 'px';
+                tableEl.style.top = table.y + 'px';
+                tableEl.textContent = tableNames[table.id] || table.id;
+                tableEl.dataset.tableId = table.id;
+                
+                ballroom.appendChild(tableEl);
+                if (!tableAssignments[table.id]) tableAssignments[table.id] = [];
+                
+                // Add 12 chairs around this table
+                createChairs(tableEl, table.x, table.y, table.id);
+                
+                setupDropZone(tableEl);
+                
+                tableEl.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    showTableDetail(table.id);
+                });
+                
+                tableEl.addEventListener('dblclick', function(e) {
+                    e.stopPropagation();
+                    renameTable(table.id);
+                });
+                
+                tableEl.draggable = true;
+                tableEl.addEventListener('dragstart', function(e) {
+                    e.dataTransfer.setData('text/plain', 'table:' + table.id);
+                    e.target.classList.add('dragging');
+                });
+                tableEl.addEventListener('dragend', function(e) {
+                    e.target.classList.remove('dragging');
+                });
+            });
+            
+            // Setup sweetheart table (no chairs)
+            const sweetheartTable = document.querySelector('[data-table-id="sweetheart"]');
+            tableAssignments['sweetheart'] = [];
+            setupDropZone(sweetheartTable);
+            
+            sweetheartTable.addEventListener('click', function(e) {
+                e.stopPropagation();
+                showTableDetail('sweetheart');
+            });
+        }
+
+        function initializeGuests() {
+            const guestList = document.getElementById('guest-list');
+            guests.forEach(guest => {
+                const guestEl = document.createElement('div');
+                guestEl.className = 'guest';
+                guestEl.textContent = window.guestData[guest] ? window.guestData[guest].name : guest;
+                guestEl.draggable = true;
+                guestEl.dataset.userId = guest;
+                
+                guestEl.addEventListener('dragstart', handleDragStart);
+                guestEl.addEventListener('dragend', handleDragEnd);
+                guestEl.title = showGuestInfo(guest);
+                
+                guestList.appendChild(guestEl);
+            });
+            updateStats();
+        }
+
+        function setupDropZone(element) {
+            element.addEventListener('dragover', handleDragOver);
+            element.addEventListener('drop', handleDrop);
+            element.addEventListener('dragenter', handleDragEnter);
+            element.addEventListener('dragleave', handleDragLeave);
+        }
+
+        let selectedGuests = new Set();
+        
+        function handleDragStart(e) {
+            const userId = e.target.dataset.userId;
+            if (selectedGuests.has(userId)) {
+                e.dataTransfer.setData('text/plain', 'multi:' + Array.from(selectedGuests).join(','));
+            } else {
+                e.dataTransfer.setData('text/plain', userId);
+            }
+            e.target.classList.add('dragging');
+        }
+
+        function handleDragEnd(e) {
+            e.target.classList.remove('dragging');
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault();
+        }
+
+        function handleDragEnter(e) {
+            e.preventDefault();
+            e.target.classList.add('drag-over');
+        }
+
+        function handleDragLeave(e) {
+            e.target.classList.remove('drag-over');
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            e.target.classList.remove('drag-over');
+            
+            const dragData = e.dataTransfer.getData('text/plain');
+            const tableId = e.target.dataset.tableId;
+            const seatIndex = e.target.dataset.seatIndex;
+            
+            // Handle table swap or unassign
+            if (dragData.startsWith('table:')) {
+                const sourceTableId = dragData.replace('table:', '');
+                const targetTableId = tableId;
+                
+                if (e.target.classList.contains('dance-floor')) {
+                    // Unassign all guests from table
+                    const guestsToUnassign = tableAssignments[sourceTableId] || [];
+                    tableAssignments[sourceTableId] = [];
+                    
+                    // Add guests back to pool
+                    guestsToUnassign.forEach(userId => {
+                        if (userId && !document.querySelector(`#guest-list [data-user-id="${userId}"]`)) {
+                            const guestEl = document.createElement('div');
+                            guestEl.className = 'guest';
+                            guestEl.textContent = window.guestData[userId] ? window.guestData[userId].name : userId;
+                            guestEl.draggable = true;
+                            guestEl.dataset.userId = userId;
+                            guestEl.addEventListener('dragstart', handleDragStart);
+                            guestEl.addEventListener('dragend', handleDragEnd);
+                            guestEl.addEventListener('click', handleGuestClick);
+                            guestEl.title = showGuestInfo(userId);
+                            document.getElementById('guest-list').appendChild(guestEl);
+                        }
+                    });
+                    
+                    updateStats();
+                } else if (sourceTableId !== targetTableId && targetTableId && targetTableId !== 'pool') {
+                    // Swap table assignments and names
+                    const sourceAssignments = [...(tableAssignments[sourceTableId] || [])];
+                    const targetAssignments = [...(tableAssignments[targetTableId] || [])];
+                    const sourceName = tableNames[sourceTableId];
+                    const targetName = tableNames[targetTableId];
+                    
+                    tableAssignments[sourceTableId] = targetAssignments;
+                    tableAssignments[targetTableId] = sourceAssignments;
+                    tableNames[sourceTableId] = targetName;
+                    tableNames[targetTableId] = sourceName;
+                    
+                    initializeTables();
+                    const openPanel = document.querySelector('.table-panel');
+                    if (openPanel) {
+                        closeTableDetail();
+                    }
+                    updateStats();
+                }
+                return;
+            }
+            
+            // Handle table tag assignment
+            if (dragData.startsWith('tabletag:')) {
+                const tableTag = dragData.replace('tabletag:', '');
+                const targetTableId = tableId;
+                
+                if (targetTableId && targetTableId !== 'pool' && window.tableTagsData && window.tableTagsData[tableTag]) {
+                    tableAssignments[targetTableId] = [...window.tableTagsData[tableTag]];
+                    redistributeGuests();
+                    updateStats();
+                    const openPanel = document.querySelector('.table-panel');
+                    if (openPanel) {
+                        const currentTableId = openPanel.querySelector('.detail-table').textContent;
+                        closeTableDetail();
+                        showTableDetail(currentTableId === 'S' ? 'sweetheart' : currentTableId);
+                    }
+                }
+                return;
+            }
+            
+            // Handle multi-guest drop
+            if (dragData.startsWith('multi:')) {
+                const userIds = dragData.replace('multi:', '').split(',');
+                if (tableId && tableId !== 'pool') {
+                    userIds.forEach(userId => {
+                        // Remove from previous assignment
+                        Object.keys(tableAssignments).forEach(id => {
+                            for (let i = 0; i < tableAssignments[id].length; i++) {
+                                if (tableAssignments[id][i] === userId) {
+                                    tableAssignments[id][i] = null;
+                                }
+                            }
+                        });
+                        tableAssignments[tableId].push(userId);
+                        const guestEl = document.querySelector(`[data-user-id="${userId}"]`);
+                        if (guestEl) guestEl.remove();
+                    });
+                    selectedGuests.clear();
+                    document.querySelectorAll('.guest.selected').forEach(el => el.classList.remove('selected'));
+                    redistributeGuests();
+                    updateStats();
+                }
+                return;
+            }
+            
+            // Handle guest drop
+            const userId = dragData;
+            const guestEl = document.querySelector(`[data-user-id="${userId}"]`);
+            
+            // Remove from previous assignment
+            Object.keys(tableAssignments).forEach(id => {
+                for (let i = 0; i < tableAssignments[id].length; i++) {
+                    if (tableAssignments[id][i] === userId) {
+                        tableAssignments[id][i] = null;
+                    }
+                }
+            });
+            
+            // Add to new location
+            if (tableId === 'pool' || e.target.classList.contains('dance-floor')) {
+                if (guestEl) {
+                    // Create new guest element in pool if it doesn't exist
+                    if (!document.querySelector(`#guest-list [data-user-id="${userId}"]`)) {
+                        const newGuestEl = document.createElement('div');
+                        newGuestEl.className = 'guest';
+                        newGuestEl.textContent = window.guestData[userId] ? window.guestData[userId].name : userId;
+                        newGuestEl.draggable = true;
+                        newGuestEl.dataset.userId = userId;
+                        newGuestEl.addEventListener('dragstart', handleDragStart);
+                        newGuestEl.addEventListener('dragend', handleDragEnd);
+                        newGuestEl.addEventListener('click', handleGuestClick);
+                        newGuestEl.title = showGuestInfo(userId);
+                        document.getElementById('guest-list').appendChild(newGuestEl);
+                    }
+                }
+                const openPanel = document.querySelector('.table-panel');
+                if (openPanel) {
+                    const currentTableId = openPanel.querySelector('.detail-table').textContent;
+                    closeTableDetail();
+                    showTableDetail(currentTableId === 'S' ? 'sweetheart' : currentTableId);
+                }
+            } else if (tableId && seatIndex !== undefined) {
+                if (!tableAssignments[tableId]) {
+                    tableAssignments[tableId] = [];
+                }
+                while (tableAssignments[tableId].length <= seatIndex) {
+                    tableAssignments[tableId].push(null);
+                }
+                
+                // If seat is occupied, find original seat and swap
+                const existingGuest = tableAssignments[tableId][seatIndex];
+                if (existingGuest) {
+                    Object.keys(tableAssignments).forEach(id => {
+                        for (let i = 0; i < tableAssignments[id].length; i++) {
+                            if (tableAssignments[id][i] === null) {
+                                tableAssignments[id][i] = existingGuest;
+                                return;
+                            }
+                        }
+                    });
+                }
+                
+                tableAssignments[tableId][seatIndex] = userId;
+                redistributeGuests();
+                updateStats();
+                const openPanel = document.querySelector('.table-panel');
+                if (openPanel && openPanel.style.display === 'block') {
+                    const currentTableId = openPanel.querySelector('.detail-table').textContent;
+                    const actualTableId = currentTableId === 'S' ? 'sweetheart' : currentTableId;
+                    closeTableDetail();
+                    showTableDetail(actualTableId);
+                }
+            } else if (tableId) {
+                tableAssignments[tableId].push(userId);
+                if (guestEl) guestEl.remove();
+            }
+            
+            updateStats();
+        }
+
+        function updateStats() {
+            const assigned = Object.values(tableAssignments).flat().filter(userId => userId).length;
+            const visibleUnassigned = document.querySelectorAll('#guest-list .guest').length;
+            document.getElementById('assigned-count').textContent = assigned;
+            document.getElementById('unassigned-count').textContent = visibleUnassigned;
+            updateChairColors();
+            updateTableTagsDisplay();
+        }
+        
+        function renameTable(tableId) {
+            const currentName = tableNames[tableId] || tableId.toString();
+            const newName = prompt('Enter new table name:', currentName);
+            if (newName !== null && newName.trim()) {
+                tableNames[tableId] = newName.trim();
+                initializeTables();
+                const openPanel = document.querySelector('.table-panel');
+                if (openPanel) {
+                    closeTableDetail();
+                    showTableDetail(tableId);
+                }
+            }
+        }
+        
+        function updateTableTagsDisplay() {
+            // No longer needed
+        }
+        
+        function updateChairColors() {
+            document.querySelectorAll('.chair').forEach(chair => {
+                const tableId = chair.dataset.tableId;
+                const seatIndex = parseInt(chair.dataset.seatIndex);
+                const assignments = tableAssignments[tableId] || [];
+                
+                if (assignments[seatIndex]) {
+                    chair.style.background = '#6b8e7a'; // sage green
+                } else {
+                    chair.style.background = '#ccc'; // grey
+                }
+            });
+            
+            // Update table colors for overcapacity
+            document.querySelectorAll('.table').forEach(table => {
+                const tableId = table.dataset.tableId;
+                const assignments = tableAssignments[tableId] || [];
+                const guestCount = assignments.filter(id => id).length;
+                const maxCapacity = tableId === 'sweetheart' ? 2 : 12;
+                
+                if (guestCount > maxCapacity) {
+                    table.style.background = '#d32f2f';
+                } else {
+                    table.style.background = '#5a7ba8';
+                }
+            });
+        }
+
+        function saveSeatingChart() {
+            const pageTitle = document.getElementById('page-title').textContent.trim();
+            const unassignedGuests = Array.from(document.querySelectorAll('#guest-list .guest')).map(el => el.dataset.userId);
+            const data = {
+                pageTitle: pageTitle,
+                tableAssignments: tableAssignments,
+                tableNames: tableNames,
+                currentTableCount: currentTableCount,
+                guestData: window.guestData,
+                unassignedGuests: unassignedGuests,
+                timestamp: new Date().toISOString()
+            };
+            const json = JSON.stringify(data, null, 2);
+            const blob = new Blob([json], {type: 'application/json'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = pageTitle + '.json';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function loadSeatingChart() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json';
+            input.onchange = function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        try {
+                            const data = JSON.parse(e.target.result);
+                            if (data.pageTitle) {
+                                document.getElementById('page-title').textContent = data.pageTitle;
+                            }
+                            tableAssignments = data.tableAssignments || {};
+                            tableNames = data.tableNames || {};
+                            if (data.guestData) {
+                                Object.assign(window.guestData, data.guestData);
+                            }
+                            if (data.unassignedGuests) {
+                                const guestList = document.getElementById('guest-list');
+                                data.unassignedGuests.forEach(userId => {
+                                    const guestEl = document.createElement('div');
+                                    guestEl.className = 'guest';
+                                    guestEl.textContent = window.guestData[userId] ? window.guestData[userId].name : userId;
+                                    guestEl.draggable = true;
+                                    guestEl.dataset.userId = userId;
+                                    guestEl.addEventListener('dragstart', handleDragStart);
+                                    guestEl.addEventListener('dragend', handleDragEnd);
+                                    guestEl.addEventListener('click', handleGuestClick);
+                                    guestEl.title = showGuestInfo(userId);
+                                    guestList.appendChild(guestEl);
+                                });
+                            }
+                            if (data.currentTableCount) {
+                                currentTableCount = data.currentTableCount;
+                                document.getElementById('table-count-input').value = currentTableCount;
+                                document.getElementById('table-count-slider').value = currentTableCount;
+                            }
+                            initializeTables();
+                            redistributeGuests();
+                            updateStats();
+                            alert('Seating chart loaded successfully!');
+                        } catch (error) {
+                            alert('Error loading file: ' + error.message);
+                        }
+                    };
+                    reader.readAsText(file);
+                }
+            };
+            input.click();
+        }
+
+        function clearAll() {
+            if (confirm('Clear all table assignments?')) {
+                // Get all assigned guests before clearing
+                const assignedGuests = Object.values(tableAssignments).flat().filter(userId => userId);
+                
+                // Clear all assignments
+                Object.keys(tableAssignments).forEach(id => {
+                    tableAssignments[id] = [];
+                });
+                
+                // Add all guests back to the pool
+                const guestList = document.getElementById('guest-list');
+                assignedGuests.forEach(userId => {
+                    if (!document.querySelector(`#guest-list [data-user-id="${userId}"]`)) {
+                        const guestEl = document.createElement('div');
+                        guestEl.className = 'guest';
+                        guestEl.textContent = window.guestData[userId] ? window.guestData[userId].name : userId;
+                        guestEl.draggable = true;
+                        guestEl.dataset.userId = userId;
+                        guestEl.addEventListener('dragstart', handleDragStart);
+                        guestEl.addEventListener('dragend', handleDragEnd);
+                        guestEl.addEventListener('click', handleGuestClick);
+                        guestEl.title = showGuestInfo(userId);
+                        guestList.appendChild(guestEl);
+                    }
+                });
+                
+                updateStats();
+            }
+        }
+
+        function redistributeGuests() {
+            const guestList = document.getElementById('guest-list');
+            const assignedGuests = Object.values(tableAssignments).flat().filter(userId => userId);
+            
+            // Create unassigned guests that don't exist in pool
+            Object.keys(window.guestData).forEach(userId => {
+                if (!assignedGuests.includes(userId) && !document.querySelector(`#guest-list [data-user-id="${userId}"]`)) {
+                    const guestEl = document.createElement('div');
+                    guestEl.className = 'guest';
+                    guestEl.textContent = window.guestData[userId].name;
+                    guestEl.draggable = true;
+                    guestEl.dataset.userId = userId;
+                    guestEl.addEventListener('dragstart', handleDragStart);
+                    guestEl.addEventListener('dragend', handleDragEnd);
+                    guestEl.addEventListener('click', handleGuestClick);
+                    guestEl.title = showGuestInfo(userId);
+                    guestList.appendChild(guestEl);
+                }
+            });
+            
+            // Remove assigned guests from pool
+            document.querySelectorAll('#guest-list .guest').forEach(guest => {
+                const userId = guest.dataset.userId;
+                if (assignedGuests.includes(userId)) {
+                    guest.remove();
+                }
+            });
+            
+            updateStats();
+            filterGuests();
+        }
+        
+        function parseCSVLine(line) {
+            const result = [];
+            let current = '';
+            let inQuotes = false;
+            
+            for (let i = 0; i < line.length; i++) {
+                const char = line[i];
+                if (char === '"') {
+                    inQuotes = !inQuotes;
+                } else if (char === ',' && !inQuotes) {
+                    result.push(current.trim());
+                    current = '';
+                } else {
+                    current += char;
+                }
+            }
+            result.push(current.trim());
+            return result;
+        }
+        
+        function extractGuestData(csvContent) {
+            const lines = csvContent.split('\n').filter(line => line.trim());
+            const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase());
+            const firstNameIndex = headers.findIndex(h => h.includes('first'));
+            const lastNameIndex = headers.findIndex(h => h.includes('last'));
+            const tagsIndex = headers.findIndex(h => h.includes('tag'));
+            const rsvpIndex = headers.findIndex(h => h.includes('rsvp'));
+            
+            const tableGuestData = {};
+            const unassignedGuests = [];
+            
+            for (let i = 1; i < lines.length; i++) {
+                const row = parseCSVLine(lines[i]);
+                if (row.length < 3) continue;
+                
+                const firstName = row[firstNameIndex] || '';
+                const lastName = row[lastNameIndex] || '';
+                const tagsCell = row[tagsIndex] || '';
+                const rsvpStatus = row[rsvpIndex] || '';
+                const fullName = (firstName + ' ' + lastName).trim();
+                
+                if (!fullName) continue;
+                
+                const userId = crypto.randomUUID();
+                
+                // Store guest data with userId
+                window.guestData[userId] = {
+                    name: fullName,
+                    rsvp: rsvpStatus,
+                    tags: tagsCell.split(',').map(tag => tag.trim()).filter(tag => tag)
+                };
+                
+                // Skip guests who declined RSVP
+                if (rsvpStatus.toLowerCase().includes('decline')) continue;
+                
+                const tags = tagsCell.split(',').map(tag => tag.trim());
+                const tableTags = tags.filter(tag => tag.toLowerCase().includes('table'));
+                
+                if (tableTags.length > 0) {
+                    let selectedTag = tableTags[0];
+                    if (tableTags.length > 1) {
+                        selectedTag = tableTags.reduce((min, tag) => 
+                            (tableGuestData[tag] || []).length < (tableGuestData[min] || []).length ? tag : min
+                        );
+                    }
+                    
+                    if (!tableGuestData[selectedTag]) tableGuestData[selectedTag] = [];
+                    if (tableGuestData[selectedTag].length < 12) {
+                        tableGuestData[selectedTag].push(userId);
+                    } else {
+                        unassignedGuests.push(userId);
+                    }
+                } else {
+                    unassignedGuests.push(userId);
+                }
+            }
+            
+            return { guestData: tableGuestData, unassignedGuests };
+        }
+        
+        function assignGuestDataToTables(guestData) {
+            const sortedTags = Object.keys(guestData).sort((a, b) => {
+                const cleanA = a.replace(/^[^\x00-\x7F]+/, '').trim();
+                const cleanB = b.replace(/^[^\x00-\x7F]+/, '').trim();
+                return cleanA.localeCompare(cleanB, undefined, {numeric: true, sensitivity: 'base'});
+            });
+            
+            sortedTags.forEach((tag, index) => {
+                const tableId = index + 1;
+                if (tableId <= currentTableCount) {
+                    tableNames[tableId] = tag;
+                    tableAssignments[tableId] = [...guestData[tag]];
+                }
+            });
+            
+            return sortedTags.length;
+        }
+        
+        function loadGuestData() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.csv';
+            input.onchange = function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        try {
+                            const { guestData, unassignedGuests } = extractGuestData(e.target.result);
+                            const assignedCount = assignGuestDataToTables(guestData);
+                            const totalGuests = Object.values(guestData).flat().length + unassignedGuests.length;
+                            
+                            // Add unassigned guests to guest pool
+                            const guestList = document.getElementById('guest-list');
+                            unassignedGuests.forEach(userId => {
+                                const guestEl = document.createElement('div');
+                                guestEl.className = 'guest';
+                                guestEl.textContent = window.guestData[userId] ? window.guestData[userId].name : userId;
+                                guestEl.draggable = true;
+                                guestEl.dataset.userId = userId;
+                                guestEl.addEventListener('dragstart', handleDragStart);
+                                guestEl.addEventListener('dragend', handleDragEnd);
+                                guestEl.addEventListener('click', handleGuestClick);
+                                guestEl.title = showGuestInfo(userId);
+                                guestList.appendChild(guestEl);
+                            });
+                            
+                            initializeTables();
+                            redistributeGuests();
+                            updateStats();
+                            alert(`Guest data loaded successfully! ${totalGuests} total guests (${Object.values(guestData).flat().length} assigned, ${unassignedGuests.length} unassigned).`);
+                        } catch (error) {
+                            alert('Error loading CSV file: ' + error.message);
+                        }
+                    };
+                    reader.readAsText(file);
+                }
+            };
+            input.click();
+        }
+        
+        function showTableDetail(tableId) {
+            const panel = document.getElementById('table-panel');
+            const panelInner = document.getElementById('table-panel-inner');
+            
+            panelInner.className = 'table-panel-inner';
+            panelInner.innerHTML = `
+                <button class="close-detail" onclick="closeTableDetail()">&times;</button>
+                <div class="detail-table" ondblclick="renameTable('${tableId}')">${tableId === 'sweetheart' ? 'S' : (tableNames[tableId] || tableId)}</div>
+            `;
+            
+            // Create 12 seats around the table (or 2 for sweetheart)
+            const seatCount = tableId === 'sweetheart' ? 2 : 12;
+            const assignments = tableAssignments[tableId] || [];
+            
+            for (let i = 0; i < seatCount; i++) {
+                const angle = (i * (360 / seatCount)) * (Math.PI / 180);
+                const radius = tableId === 'sweetheart' ? 100 : 120;
+                const seatX = 200 + Math.cos(angle) * radius;
+                const seatY = 200 + Math.sin(angle) * radius;
+                
+                // Add label for chair (name or number)
+                const label = document.createElement('div');
+                label.className = 'seat-name';
+                if (assignments[i]) {
+                    const guestName = window.guestData[assignments[i]] ? window.guestData[assignments[i]].name : assignments[i];
+                    const nameParts = guestName.split(' ');
+                    label.innerHTML = nameParts[0] + '<br>' + nameParts.slice(1).join(' ');
+                    label.draggable = true;
+                    label.dataset.userId = assignments[i];
+                    label.addEventListener('dragstart', handleDragStart);
+                    label.addEventListener('dragend', handleDragEnd);
+                    label.title = showGuestInfo(assignments[i]);
+                } else {
+                    label.textContent = i + 1;
+                }
+                label.style.left = seatX + 'px';
+                label.style.top = seatY + 'px';
+                label.dataset.seatIndex = i;
+                label.dataset.tableId = tableId;
+                
+                // Create invisible larger drop zone
+                const dropZone = document.createElement('div');
+                dropZone.style.position = 'absolute';
+                dropZone.style.left = (seatX - 33) + 'px';
+                dropZone.style.top = (seatY - 22) + 'px';
+                dropZone.style.width = '66px';
+                dropZone.style.height = '44px';
+                dropZone.style.transform = 'translate(-50%, -50%)';
+                dropZone.style.pointerEvents = 'none';
+                dropZone.dataset.seatIndex = i;
+                dropZone.dataset.tableId = tableId;
+                setupDropZone(dropZone);
+                panel.querySelector('.table-panel-inner').appendChild(dropZone);
+                
+                setupDropZone(label);
+                
+                label.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    assignGuestToSeat(tableId, i);
+                });
+                
+                panel.querySelector('.table-panel-inner').appendChild(label);
+            }
+            
+            // Show excess guests if over capacity
+            const maxCapacity = tableId === 'sweetheart' ? 2 : 12;
+            const excessGuests = assignments.slice(maxCapacity).filter(id => id);
+            if (excessGuests.length > 0) {
+                panelInner.classList.add('has-excess');
+                const excessDiv = document.createElement('div');
+                excessDiv.className = 'excess-guests';
+                excessDiv.innerHTML = '<h4>Excess Guests:</h4>';
+                excessGuests.forEach(userId => {
+                    const guestEl = document.createElement('div');
+                    guestEl.className = 'guest excess';
+                    guestEl.textContent = window.guestData[userId] ? window.guestData[userId].name : userId;
+                    guestEl.draggable = true;
+                    guestEl.dataset.userId = userId;
+                    guestEl.addEventListener('dragstart', handleDragStart);
+                    guestEl.addEventListener('dragend', handleDragEnd);
+                    guestEl.addEventListener('click', handleGuestClick);
+                    guestEl.title = showGuestInfo(userId);
+                    excessDiv.appendChild(guestEl);
+                });
+                panelInner.appendChild(excessDiv);
+            }
+            
+            panel.style.display = 'block';
+            
+            // Apply search highlighting if search is active
+            const searchQuery = document.getElementById('guest-search').value;
+            if (searchQuery.trim()) {
+                searchGuests(searchQuery);
+            }
+        }
+        
+        function closeTableDetail() {
+            const panel = document.getElementById('table-panel');
+            if (panel) {
+                panel.style.display = 'none';
+            }
+        }
+        
+        function assignGuestToSeat(tableId, seatIndex) {
+            const assignedUserIds = Object.values(tableAssignments).flat().filter(id => id);
+            const availableGuests = Object.keys(window.guestData).filter(userId => 
+                !assignedUserIds.includes(userId)
+            ).map(userId => window.guestData[userId].name);
+            
+            if (availableGuests.length === 0) {
+                alert('No unassigned guests available');
+                return;
+            }
+            
+            const guestName = prompt('Enter guest name or select from:\n' + 
+                availableGuests.slice(0, 10).join('\n') + 
+                (availableGuests.length > 10 ? '\n...' : ''));
+            
+            const userId = Object.keys(window.guestData).find(id => 
+                window.guestData[id].name === guestName
+            );
+            
+            if (userId) {
+                if (!tableAssignments[tableId]) {
+                    tableAssignments[tableId] = [];
+                }
+                
+                // Ensure array is long enough
+                while (tableAssignments[tableId].length <= seatIndex) {
+                    tableAssignments[tableId].push(null);
+                }
+                
+                tableAssignments[tableId][seatIndex] = userId;
+                updateStats();
+                closeTableDetail();
+                showTableDetail(tableId);
+            }
+        }
+
+        function displayTableTags(tableTags) {
+            // No longer needed
+        }
+
+        function updateTableCount(count) {
+            currentTableCount = parseInt(count);
+            document.getElementById('table-count-input').value = count;
+            document.getElementById('table-count-slider').value = count;
+            
+            // Initialize new table assignments only if empty
+            if (Object.keys(tableAssignments).length === 0) {
+                for (let i = 1; i <= currentTableCount; i++) {
+                    tableAssignments[i] = [];
+                }
+                tableAssignments['sweetheart'] = [];
+            }
+            
+            initializeTables();
+            updateStats();
+        }
+        
+        function updateTableCountFromSlider(count) {
+            document.getElementById('table-count-input').value = count;
+            updateTableCount(count);
+        }
+        
+        function toggleMenu() {
+            const dropdown = document.getElementById('menu-dropdown');
+            dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
+        }
+        
+        function searchGuests(query) {
+            // Clear previous highlights
+            document.querySelectorAll('.chair, .guest, .seat-name').forEach(el => {
+                el.style.background = '';
+            });
+            
+            if (!query.trim()) {
+                updateChairColors();
+                return;
+            }
+            
+            const searchTerm = query.toLowerCase();
+            
+            // Search assigned guests (chairs)
+            Object.keys(tableAssignments).forEach(tableId => {
+                tableAssignments[tableId].forEach((userId, seatIndex) => {
+                    if (userId && seatIndex < (tableId === 'sweetheart' ? 2 : 12)) {
+                        const guestName = window.guestData[userId] ? window.guestData[userId].name : userId;
+                        if (guestName.toLowerCase().includes(searchTerm)) {
+                            const chair = document.querySelector(`.chair[data-table-id="${tableId}"][data-seat-index="${seatIndex}"]`);
+                            if (chair) {
+                                chair.style.background = 'yellow !important';
+                                chair.style.setProperty('background', 'yellow', 'important');
+                            }
+                            
+                            // Highlight in side panel if open
+                            const seatLabel = document.querySelector(`.seat-name[data-table-id="${tableId}"][data-seat-index="${seatIndex}"]`);
+                            if (seatLabel) seatLabel.style.background = 'yellow';
+                        }
+                    }
+                });
+            });
+            
+            // Search unassigned and excess guests
+            document.querySelectorAll('.guest').forEach(guestEl => {
+                const userId = guestEl.dataset.userId;
+                const guestName = window.guestData[userId] ? window.guestData[userId].name : userId;
+                if (guestName && guestName.toLowerCase().includes(searchTerm)) {
+                    guestEl.style.background = 'yellow';
+                }
+            });
+        }
+        
+        function editTitle() {
+            const h1 = document.getElementById('page-title');
+            const currentText = h1.textContent;
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = currentText;
+            input.className = 'title-edit';
+            input.onblur = () => {
+                h1.textContent = input.value.trim() || 'Wedding Ballroom Seating Chart';
+                h1.style.display = 'block';
+                input.remove();
+            };
+            input.onkeydown = (e) => {
+                if (e.key === 'Enter') input.blur();
+            };
+            h1.style.display = 'none';
+            h1.parentNode.insertBefore(input, h1.nextSibling);
+            input.focus();
+            input.select();
+        }
+        
+        function handleGuestClick(e) {
+            const userId = e.target.dataset.userId;
+            if (e.ctrlKey || e.metaKey) {
+                if (selectedGuests.has(userId)) {
+                    selectedGuests.delete(userId);
+                    e.target.classList.remove('selected');
+                } else {
+                    selectedGuests.add(userId);
+                    e.target.classList.add('selected');
+                }
+            } else {
+                selectedGuests.clear();
+                document.querySelectorAll('.guest.selected').forEach(el => el.classList.remove('selected'));
+            }
+        }
+        
+        // Close menu when clicking outside
+        document.addEventListener('click', function(e) {
+            const menu = document.querySelector('.hamburger-menu');
+            const dropdown = document.getElementById('menu-dropdown');
+            if (!menu.contains(e.target)) {
+                dropdown.style.display = 'none';
+            }
+        });
+        
+        function filterGuests() {
+            const hideDeclined = document.getElementById('hide-declined').checked;
+            document.querySelectorAll('#guest-list .guest').forEach(guestEl => {
+                const userId = guestEl.dataset.userId;
+                const guestInfo = window.guestData[userId];
+                if (hideDeclined && guestInfo && guestInfo.rsvp.toLowerCase().includes('decline')) {
+                    guestEl.style.display = 'none';
+                } else {
+                    guestEl.style.display = 'inline-block';
+                }
+            });
+        }
+        
+        function showGuestInfo(userId) {
+            const info = window.guestData[userId];
+            if (info) {
+                return `ID: ${userId}\nRSVP: ${info.rsvp}\nTags: ${info.tags.join(', ')}`;
+            }
+            return `ID: ${userId}\nNo additional information available`;
+        }
+
+        // Initialize the application
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeTables();
+            initializeGuests();
+            
+            // Setup guest pool as drop zone for returning guests
+            const guestList = document.getElementById('guest-list');
+            setupDropZone(guestList);
+            guestList.dataset.tableId = 'pool';
+            
+            // Setup dance floor as drop zone
+            const danceFloor = document.querySelector('.dance-floor');
+            setupDropZone(danceFloor);
+            
+
+        });
+    </script>
+</body>
+</html>
